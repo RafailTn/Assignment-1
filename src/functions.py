@@ -1,55 +1,103 @@
-# Loading the libraries for the models and csv files
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-import joblib
-import seaborn as sns
-from sklearn.model_selection import train_test_split, KFold, cross_val_score
-from sklearn.metrics import mean_squared_error, mean_absolute_error, make_scorer, r2_score
-from sklearn.linear_model import ElasticNet, BayesianRidge
-from sklearn.svm import SVR
+# Loading the libraries
 from sklearn.pipeline import Pipeline
-from sklearn.decomposition import NMF, PCA
-from sklearn.feature_selection import SelectKBest, mutual_info_classif
 from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.utils import resample
+from pathlib import Path
+import joblib
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-dev_set = pd.read_csv('./data/development_final_data.csv', header=0)
-test_set = pd.read_csv('./data/evaluation_final_data.csv', header=0)
+def load_scaler():
+    # Load the scaler
+    cwd = Path.cwd()
+    scaler_path = cwd / "models" / "Standardscaler.pkl"
+    scaler = joblib.load(scaler_path)
+    return scaler
 
-y = dev_set['BMI']
-X = dev_set.drop(columns=['BMI'])
+def create_pipeline(model, scaler=False, feature_selector=None, grid_params=None, cv=5, scoring=None):
+    # Initialize the steps for the pipeline
+    steps = []
+    # Add the scaler if needed
+    if scaler:
+        # Load the scaler
+        scaler = load_scaler()
+        steps.append(('scaler', scaler))
+    # Add the feature selector
+    if feature_selector is not None:
+        steps.append(('feature_selector', feature_selector))
+    # Add the model to the pipeline
+    steps.append(('model', model))
+    pipeline = Pipeline(steps)
+    # If grid_params is provided, create a GridSearchCV
+    if grid_params is not None:
+        pipeline = GridSearchCV(pipeline, param_grid=grid_params, cv=cv, scoring=scoring)
+    return pipeline
 
-x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-models = ['ElasticNet', 'SVR', 'BayesianRidge']
-def baseline_model_fit(model, save_model=False, save_path=None):
-    # Fit the model
-    if model == 'ElasticNet':
-        regr = ElasticNet(random_state=42)
-    elif model == 'SVR':
-        regr = SVR(random_state=42)
-    elif model == 'BayesianRidge':
-        regr = BayesianRidge(random_state=42)
-    else:
-        raise ValueError("Model not recognized. Choose 'ElasticNet', 'SVR', or 'BayesianRidge'.")
-    regr.fit(x_train, y_train)
-    predictions = regr.predict(x_test)
-    # Calculate the RMSE
-    rmse = np.sqrt(mean_squared_error(y_test, predictions))
-    print(f'Root Mean Squared Error of Baseline {model}: {rmse}')
-    # Calculate the MAE
-    mae = mean_absolute_error(y_test, predictions)
-    print(f'Mean Absolute Error of Baseline {model}: {mae}')
-    # Calculate the R2 score
-    r2 = r2_score(y_test, predictions)
-    print(f'R2 Score of Baseline {model}: {r2}')
-    # Save the model
-    if save_model:
-        joblib.dump(regr, save_path)
+def train_model_and_predict(X_train, y_train, x_test, pipeline, filename, save=False):
+    # Fit the pipeline to the training data
+    pipeline.fit(X_train, y_train)
+    # Save the pipeline
+    if save:
+        joblib.dump(pipeline, 'models/'+filename)
+    # Make predictions
+    y_pred = pipeline.predict(x_test)
+    return y_pred, pipeline
+
+def bootstrap(x, y_true, pipeline, n_iter=100):
+    # Implement bootstrapping to calculate the confidence intervals
+    rmse_scores = []
+    mae_scores = []
+    r2_scores = []
+    for _ in range(n_iter):
+        X_boot, y_boot = resample(x, y_true, replace=True, random_state=42)
+        # Identify OOB samples (samples not in X_boot)
+        oob_mask = ~X.index.isin(X_boot.index)
+        X_oob, y_oob = X[oob_mask], y[oob_mask]      
+        # Train model on bootstrapped data
+        pipeline.fit(X_boot, y_boot)
+        # Predict on OOB samples
+        if not X_oob.empty:
+            y_pred = model.predict(X_oob)
+            # Evaluate on OOB samples
+            rmse = mean_squared_error(y_oob, y_pred, squared=False)
+            rmse_scores.append(rmse)
+            mae = mean_absolute_error(y_oob, y_pred)
+            mae_scores.append(mae)
+            r2 = r2_score(y_oob, y_pred)
+            r2_scores.append(r2)
+    return rmse_scores, mae_scores, r2_scores
+
+def caclulate_statitstics(scores):
+    # Calculate the mean, median and standard deviation of the scores
+    mean = np.mean(scores)
+    std = np.std(scores)
+    median = np.median(scores)
+    # Calculate the confidence intervals
+    lower_bound, upper_bound = np.percentile(scores, [2.5, 97.5])
+    return mean, std, median, lower_bound, upper_bound
+
+def create_boxplot(scores, model_name, metric, mean, std, median, ci_lower, ci_upper):
+    # Create a boxplot
+    plt.figure(figsize=(6, 6))
+    sns.boxplot(y=scores, color='lightblue', width=0.4)
+    # Add mean, median, and CI as separate markers
+    plt.axhline(mean, color='red', linestyle='--', label=f'Mean: {mean:.2f}')
+    plt.axhline(median, color='blue', linestyle='-', label=f'Median: {median:.2f}')
+    plt.axhline(ci_lower, color='green', linestyle='dotted', label=f'95% CI Lower: {ci_lower:.2f}')
+    plt.axhline(ci_upper, color='green', linestyle='dotted', label=f'95% CI Upper: {ci_upper:.2f}')
+    plt.axhline(mean - std, color='purple', linestyle='dashdot', label=f'Mean - 1 Std: {mean - std:.2f}')
+    plt.axhline(mean + std, color='purple', linestyle='dashdot', label=f'Mean + 1 Std: {mean + std:.2f}')
+    # Customize the plot
+    plt.ylabel(f"{metric} ({model_name})")
+    plt.title(f"Boxplot of {metric} ({model_name}) with CI, Mean, Median, and Std")
+    plt.legend()
+    plt.show()
 
 def main():
-    for model in models:
-        baseline_model_fit(model, save_model=True, save_path=f'./models/baseline_{model}.pkl')
-        
+    pass
+
 if __name__=="__main__":
     # Call the main function
     main()
