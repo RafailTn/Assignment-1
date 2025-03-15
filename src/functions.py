@@ -1,7 +1,8 @@
 # Loading the libraries
+import scipy.stats as st 
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
 from sklearn.utils import resample
 from pathlib import Path
 import joblib
@@ -45,53 +46,39 @@ def train_model_and_predict(X_train, y_train, x_test, pipeline, filename, save=F
     y_pred = pipeline.predict(x_test)
     return y_pred, pipeline
 
-def bootstrap(x, y_true, pipeline, n_iter=100):
-    # Implement bootstrapping to calculate the confidence intervals
+def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100):
     rmse_scores = []
     mae_scores = []
     r2_scores = []
     for _ in range(n_iter):
-        X_boot, y_boot = resample(x, y_true, replace=True, random_state=42)
-        # Identify OOB samples (samples not in X_boot)
-        oob_mask = ~X.index.isin(X_boot.index)
-        X_oob, y_oob = X[oob_mask], y[oob_mask]      
-        # Train model on bootstrapped data
+        X_boot, y_boot = resample(x, y_true, replace=True)
         pipeline.fit(X_boot, y_boot)
-        # Predict on OOB samples
-        if not X_oob.empty:
-            y_pred = model.predict(X_oob)
-            # Evaluate on OOB samples
-            rmse = mean_squared_error(y_oob, y_pred, squared=False)
-            rmse_scores.append(rmse)
-            mae = mean_absolute_error(y_oob, y_pred)
-            mae_scores.append(mae)
-            r2 = r2_score(y_oob, y_pred)
-            r2_scores.append(r2)
+        x_test_boot, y_test_boot = resample(x_test, y_test, replace=True)
+        y_pred = pipeline.predict(x_test_boot)
+        rmse = root_mean_squared_error(y_test_boot, y_pred)
+        rmse_scores.append(rmse)
+        mae = mean_absolute_error(y_test_boot, y_pred)
+        mae_scores.append(mae)
+        r2 = r2_score(y_test_boot, y_pred)
+        r2_scores.append(r2)
     return rmse_scores, mae_scores, r2_scores
 
-def caclulate_statitstics(scores):
-    # Calculate the mean, median and standard deviation of the scores
+def calculate_statistics(scores):
     mean = np.mean(scores)
     std = np.std(scores)
     median = np.median(scores)
-    # Calculate the confidence intervals
-    lower_bound, upper_bound = np.percentile(scores, [2.5, 97.5])
-    return mean, std, median, lower_bound, upper_bound
+    return mean, std, median
 
-def create_boxplot(scores, model_name, metric, mean, std, median, ci_lower, ci_upper):
-    # Create a boxplot
-    plt.figure(figsize=(6, 6))
-    sns.boxplot(y=scores, color='lightblue', width=0.4)
-    # Add mean, median, and CI as separate markers
-    plt.axhline(mean, color='red', linestyle='--', label=f'Mean: {mean:.2f}')
-    plt.axhline(median, color='blue', linestyle='-', label=f'Median: {median:.2f}')
-    plt.axhline(ci_lower, color='green', linestyle='dotted', label=f'95% CI Lower: {ci_lower:.2f}')
-    plt.axhline(ci_upper, color='green', linestyle='dotted', label=f'95% CI Upper: {ci_upper:.2f}')
-    plt.axhline(mean - std, color='purple', linestyle='dashdot', label=f'Mean - 1 Std: {mean - std:.2f}')
-    plt.axhline(mean + std, color='purple', linestyle='dashdot', label=f'Mean + 1 Std: {mean + std:.2f}')
-    # Customize the plot
-    plt.ylabel(f"{metric} ({model_name})")
-    plt.title(f"Boxplot of {metric} ({model_name}) with CI, Mean, Median, and Std")
+def create_boxplot(scores, model_name, metric, mean, std, median):
+    plt.figure(figsize=(8, 6))
+    sns.boxplot(data=scores, color="skyblue")
+    plt.axhline(mean, color='red', linestyle='dashed', linewidth=2, label=f'Mean: {mean:.3f}')
+    plt.axhline(median, color='blue', linestyle='dashed', linewidth=2, label=f'Median: {median:.3f}')
+    plt.axhline(mean - std, color='purple', linestyle='dashdot', linewidth=2, label=f'Mean - 1 Std: {mean - std:.3f}')
+    plt.axhline(mean + std, color='purple', linestyle='dashdot', linewidth=2, label=f'Mean + 1 Std: {mean + std:.3f}')
+    plt.xlabel("Bootstrap Samples")
+    plt.ylabel(f"{metric} Score")
+    plt.title(f"Bootstrapped {metric} for {model_name}")
     plt.legend()
     plt.show()
 
