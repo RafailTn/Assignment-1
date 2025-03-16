@@ -1,5 +1,4 @@
 # Loading the libraries
-import scipy.stats as st 
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, train_test_split, KFold
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
@@ -17,7 +16,7 @@ def load_scaler():
     scaler = joblib.load(scaler_path)
     return scaler
 
-def create_pipeline(model, scaler=False, feature_selector=None, grid_params=None, cv=5, scoring=None):
+def create_pipeline(model, scaler=False, feature_selector=None):
     # Initialize the steps for the pipeline
     steps = []
     # Add the scaler if needed
@@ -31,17 +30,15 @@ def create_pipeline(model, scaler=False, feature_selector=None, grid_params=None
     # Add the model to the pipeline
     steps.append(('model', model))
     pipeline = Pipeline(steps)
-    # If grid_params is provided, create a GridSearchCV
-    if grid_params is not None:
-        pipeline = GridSearchCV(pipeline, param_grid=grid_params, cv=cv, scoring=scoring)
     return pipeline
 
-def train_model_and_predict(X_train, y_train, x_test, pipeline, filename='', save=False):
+def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', filename='', save=False):
     # Fit the pipeline to the training data
     pipeline.fit(X_train, y_train)
     # Save the pipeline
     if save:
-        joblib.dump(pipeline, 'models/'+filename)
+        model_path = root_path / 'models' / filename
+        joblib.dump(pipeline, model_path)
     # Make predictions
     y_pred = pipeline.predict(x_test)
     return y_pred, pipeline
@@ -59,14 +56,13 @@ def kfold(x, y_true, pipeline, n_folds=5):
         r2_scores.append(r2_score(y_test, y_pred))
     return rmse_scores, mae_scores, r2_scores
     
-def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=True, kf=False):
+def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=False):
     scores = {'rmse_scores': [],'mae_scores': [],'r2_scores': []}
     # Bootstrap
     if bstrap and not kf:
-        for _ in range(n_iter):
-            X_boot, y_boot = resample(x, y_true, replace=True, n_samples=300)
-            pipeline.fit(X_boot, y_boot)
-            x_test_boot, y_test_boot = resample(x_test, y_test, replace=True, n_samples=100)
+        for i in range(n_iter):
+            pipeline.fit(x, y_true)
+            x_test_boot, y_test_boot = resample(x_test, y_test, replace=True, n_samples=100, random_state=i)
             y_pred = pipeline.predict(x_test_boot)
             rmse = root_mean_squared_error(y_test_boot, y_pred)
             scores['rmse_scores'].append(rmse)
@@ -112,6 +108,32 @@ def create_boxplot(scores, model_name, metric, mean, std, median):
     plt.title(f"{metric} for {model_name}")
     plt.legend()
     plt.show()
+
+def grid_search(model, x, y_true, cv=5, scoring=None, rfe_selector=None):
+    pipeline = create_pipeline(model, scaler=False, feature_selector=rfe_selector)
+    # Create the grid search with the pipeline
+    # Set the parameter grid
+    grid_params = {
+        "feature_selector__n_features_to_select": [5, 10, 15, 30, 50]
+    }
+    grid = GridSearchCV(pipeline, param_grid=grid_params, scoring=scoring, cv=cv)
+    # Fit the grid search to the data
+    grid.fit(x, y_true)
+    # Get the best parameters
+    print("Best Parameters:", grid.best_params_)
+    print("Best Score:", grid.best_score_)
+    
+    selected_features = None
+    if rfe_selector is not None and hasattr(grid.best_estimator_.named_steps['feature_selector'], "get_support"):
+        selected_mask = grid.best_estimator_.named_steps['feature_selector'].get_support()
+        if hasattr(x, "columns"):
+            selected_features = list(x.columns[selected_mask])
+        else:
+            selected_features = np.where(selected_mask)[0].tolist()
+        print("Selected Features:", selected_features)
+    
+    return grid.best_params_, grid.best_score_, selected_features
+
 
 def main():
     pass
