@@ -1,7 +1,10 @@
 # Loading the libraries
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA, KernelPCA
+from sklearn.linear_model import ElasticNet, BayesianRidge
 from sklearn.model_selection import GridSearchCV, train_test_split, KFold
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
+from sklearn.svm import SVR
 from sklearn.utils import resample
 from pathlib import Path
 import joblib
@@ -27,6 +30,8 @@ def create_pipeline(model, scaler=False, feature_selector=None):
     # Add the feature selector
     if feature_selector is not None:
         steps.append(('feature_selector', feature_selector))
+    else:
+        steps.append(('feature_selector', 'passthrough'))
     # Add the model to the pipeline
     steps.append(('model', model))
     pipeline = Pipeline(steps)
@@ -109,31 +114,47 @@ def create_boxplot(scores, model_name, metric, mean, std, median):
     plt.legend()
     plt.show()
 
-def grid_search(model, x, y_true, cv=5, scoring=None, rfe_selector=None):
-    pipeline = create_pipeline(model, scaler=False, feature_selector=rfe_selector)
-    # Create the grid search with the pipeline
-    # Set the parameter grid
-    grid_params = {
-        "feature_selector__n_features_to_select": [5, 10, 15, 30, 50]
-    }
-    grid = GridSearchCV(pipeline, param_grid=grid_params, scoring=scoring, cv=cv)
-    # Fit the grid search to the data
-    grid.fit(x, y_true)
-    # Get the best parameters
-    print("Best Parameters:", grid.best_params_)
-    print("Best Score:", grid.best_score_)
-    
-    selected_features = None
-    if rfe_selector is not None and hasattr(grid.best_estimator_.named_steps['feature_selector'], "get_support"):
-        selected_mask = grid.best_estimator_.named_steps['feature_selector'].get_support()
-        if hasattr(x, "columns"):
-            selected_features = list(x.columns[selected_mask])
-        else:
-            selected_features = np.where(selected_mask)[0].tolist()
-        print("Selected Features:", selected_features)
-    
-    return grid.best_params_, grid.best_score_, selected_features
+def grid_search(model, x, y_true, cv=5, scoring=None, feature_selection=True, fine_tune=False):
+    pipeline = create_pipeline(model, scaler=False, feature_selector=None)
+    if feature_selection and not fine_tune:
+        N_FEATURES_OPTIONS = [10, 30, 50, 95]
+        grid_params = [
+            {
+            'feature_selector': [PCA(), KernelPCA(kernel='poly', degree=3), KernelPCA(kernel='rbf')],
+            "feature_selector__n_components": N_FEATURES_OPTIONS
+            },
+        ]
+    elif fine_tune and not feature_selection:
+        if model.__class__.__name__ == 'SVR':
+            grid_params = [
 
+                {
+                    'model': [SVR(kernel='rbf')],
+                    "model__C": np.logspace(-3, 3, 10),
+                    "model__gamma": np.logspace(-3, 3, 10)
+                }
+            ]
+        elif model.__class__.__name__ == 'ElasticNet':
+            grid_params = [
+                {
+                    'model': [ElasticNet()],
+                    "model__alpha": np.logspace(-3, 3, 10),
+                    "model__l1_ratio": np.linspace(0, 1, 10)
+                }
+            ]
+        elif model.__class__.__name__ == 'BayesianRidge':
+            grid_params = [
+                {
+                    'model': [BayesianRidge()],
+                    "model__alpha_1": np.logspace(-3, 3, 10),
+                    "model__alpha_2": np.logspace(-3, 3, 10),
+                    "model__lambda_1": np.logspace(-3, 3, 10),
+                    "model__lambda_2": np.logspace(-3, 3, 10)
+                }
+            ]
+    grid = GridSearchCV(pipeline, grid_params, cv=cv, scoring=scoring, n_jobs=1)
+    grid.fit(x, y_true)
+    return grid
 
 def main():
     pass
