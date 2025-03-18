@@ -2,7 +2,7 @@
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.linear_model import ElasticNet, BayesianRidge
-from sklearn.model_selection import GridSearchCV, train_test_split, KFold
+from sklearn.model_selection import GridSearchCV, train_test_split, RepeatedKFold
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
 from sklearn.svm import SVR
 from sklearn.utils import resample
@@ -48,14 +48,15 @@ def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', fi
     y_pred = pipeline.predict(x_test)
     return y_pred, pipeline
 
-def kfold(x, y_true, pipeline, n_folds=5):
+def kfold(x, y_true, pipeline, n_splits=5, n_repeats=5, random_state=42):
     rmse_scores = []
     mae_scores = []
     r2_scores = []
-    for i, (train_index, test_index) in enumerate(KFold(n_splits=n_folds).split(x)):
+    rkf = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=random_state)
+    for train_index, test_index in rkf.split(x):
         X_train, X_test = x.iloc[train_index], x.iloc[test_index]
         y_train, y_test = y_true.iloc[train_index], y_true.iloc[test_index]
-        y_pred, pipeline = train_model_and_predict(X_train, y_train, X_test, pipeline)
+        y_pred, _ = train_model_and_predict(X_train, y_train, X_test, pipeline)
         rmse_scores.append(root_mean_squared_error(y_test, y_pred))
         mae_scores.append(mean_absolute_error(y_test, y_pred))
         r2_scores.append(r2_score(y_test, y_pred))
@@ -65,8 +66,8 @@ def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=
     scores = {'rmse_scores': [],'mae_scores': [],'r2_scores': []}
     # Bootstrap
     if bstrap and not kf:
+        pipeline.fit(x, y_true)
         for i in range(n_iter):
-            pipeline.fit(x, y_true)
             x_test_boot, y_test_boot = resample(x_test, y_test, replace=True, n_samples=100, random_state=i)
             y_pred = pipeline.predict(x_test_boot)
             rmse = root_mean_squared_error(y_test_boot, y_pred)
@@ -77,11 +78,10 @@ def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=
             scores['r2_scores'].append(r2)
     # KFold
     elif kf and not bstrap:
-        for _ in range(n_iter):
-            rmse, mae, r2 = kfold(x, y_true, pipeline)
-            scores['rmse_scores'].extend(rmse)
-            scores['mae_scores'].extend(mae)
-            scores['r2_scores'].extend(r2)
+        rmse, mae, r2 = kfold(x, y_true, pipeline, n_splits=5, n_repeats=n_iter)
+        scores['rmse_scores'].extend(rmse)
+        scores['mae_scores'].extend(mae)
+        scores['r2_scores'].extend(r2)
     # Train-test split
     else:
         x_train, x_val, y_train, y_val = train_test_split(x, y_true, test_size=0.1, random_state=42)
@@ -101,17 +101,24 @@ def calculate_statistics(scores):
     median = np.median(scores)
     return mean, std, median
 
-def create_boxplot(scores, model_name, metric, mean, std, median):
-    plt.figure(figsize=(8, 6))
-    sns.boxplot(data=scores, color="skyblue")
-    plt.axhline(mean, color='red', linestyle='dashed', linewidth=2, label=f'Mean: {mean:.3f}')
-    plt.axhline(median, color='blue', linestyle='dashed', linewidth=2, label=f'Median: {median:.3f}')
-    plt.axhline(mean - std, color='purple', linestyle='dashdot', linewidth=2, label=f'Mean - 1 Std: {mean - std:.3f}')
-    plt.axhline(mean + std, color='purple', linestyle='dashdot', linewidth=2, label=f'Mean + 1 Std: {mean + std:.3f}')
-    plt.xlabel("Samples")
-    plt.ylabel(f"{metric} Score")
-    plt.title(f"{metric} for {model_name}")
-    plt.legend()
+def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
+    n = len(metrics)
+    fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
+    # If there's only one metric, ensure axes is iterable.
+    if n == 1:
+        axes = [axes]
+    for i, metric in enumerate(metrics):
+        ax = axes[i]
+        sns.boxplot(data=scores_list[i], color="skyblue", ax=ax)
+        ax.axhline(means[i], color='red', linestyle='dashed', linewidth=2, label=f'Mean: {means[i]:.3f}')
+        ax.axhline(medians[i], color='blue', linestyle='dashed', linewidth=2, label=f'Median: {medians[i]:.3f}')
+        ax.axhline(means[i] - stds[i], color='purple', linestyle='dashdot', linewidth=2, label=f'Mean - 1 Std: {(means[i]- stds[i]):.3f}')
+        ax.axhline(means[i] + stds[i], color='purple', linestyle='dashdot', linewidth=2, label=f'Mean + 1 Std: {(means[i]+ stds[i]):.3f}')
+        ax.set_xlabel("Samples")
+        ax.set_ylabel(f"{metric} Score")
+        ax.set_title(f"{metric} for {model_name}")
+        ax.legend()
+    plt.tight_layout()
     plt.show()
 
 def grid_search(model, x, y_true, cv=5, scoring=None, feature_selection=True, fine_tune=False):
@@ -129,9 +136,13 @@ def grid_search(model, x, y_true, cv=5, scoring=None, feature_selection=True, fi
             grid_params = [
 
                 {
-                    'model': [SVR(kernel='rbf')],
-                    "model__C": np.logspace(-3, 3, 10),
-                    "model__gamma": np.logspace(-3, 3, 10)
+                    'model': [SVR()],
+                    "model__kernel": ['linear', 'poly', 'rbf'],
+                    "model__degree": [2, 3, 4, 5],
+                    "model__C": np.logspace(-3, 1, 10),
+                    "model__gamma": ['scale', 'auto'],
+                    "model__coef0": np.logspace(-3, 1, 10),
+                    "model__epsilon": np.logspace(-3, 1, 10)
                 }
             ]
         elif model.__class__.__name__ == 'ElasticNet':
