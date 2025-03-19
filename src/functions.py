@@ -7,6 +7,8 @@ from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_sco
 from sklearn.svm import SVR
 from sklearn.utils import resample
 from pathlib import Path
+from sklearn.model_selection import KFold, cross_val_score
+import optuna
 import joblib
 import numpy as np
 import matplotlib.pyplot as plt
@@ -121,51 +123,47 @@ def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
     plt.tight_layout()
     plt.show()
 
-def grid_search(model, x, y_true, cv=5, scoring=None, feature_selection=True, fine_tune=False):
+def grid_search(model, x, y_true, cv=5, scoring=None):
     pipeline = create_pipeline(model, scaler=False, feature_selector=None)
-    if feature_selection and not fine_tune:
-        N_FEATURES_OPTIONS = [10, 30, 50, 95]
-        grid_params = [
-            {
-            'feature_selector': [PCA(), KernelPCA(kernel='poly', degree=3), KernelPCA(kernel='rbf')],
-            "feature_selector__n_components": N_FEATURES_OPTIONS
-            },
-        ]
-    elif fine_tune and not feature_selection:
-        if model.__class__.__name__ == 'SVR':
-            grid_params = [
-
-                {
-                    'model': [SVR()],
-                    "model__kernel": ['linear', 'poly', 'rbf'],
-                    "model__degree": [2, 3, 4, 5],
-                    "model__C": np.logspace(-3, 1, 10),
-                    "model__gamma": ['scale', 'auto'],
-                    "model__coef0": np.logspace(-3, 1, 10),
-                    "model__epsilon": np.logspace(-3, 1, 10)
-                }
-            ]
-        elif model.__class__.__name__ == 'ElasticNet':
-            grid_params = [
-                {
-                    'model': [ElasticNet()],
-                    "model__alpha": np.logspace(-3, 3, 10),
-                    "model__l1_ratio": np.linspace(0, 1, 10)
-                }
-            ]
-        elif model.__class__.__name__ == 'BayesianRidge':
-            grid_params = [
-                {
-                    'model': [BayesianRidge()],
-                    "model__alpha_1": np.logspace(-3, 3, 10),
-                    "model__alpha_2": np.logspace(-3, 3, 10),
-                    "model__lambda_1": np.logspace(-3, 3, 10),
-                    "model__lambda_2": np.logspace(-3, 3, 10)
-                }
-            ]
+    N_FEATURES_OPTIONS = [10, 30, 50, 95]
+    grid_params = [
+        {
+        'feature_selector': [PCA(), KernelPCA(kernel='poly', degree=3), KernelPCA(kernel='rbf')],
+        "feature_selector__n_components": N_FEATURES_OPTIONS
+        },
+    ]
     grid = GridSearchCV(pipeline, grid_params, cv=cv, scoring=scoring, n_jobs=1)
     grid.fit(x, y_true)
     return grid
+
+def optuna_objective(trial, model, x, y_true):
+    if model.__class__.__name__ == 'ElasticNet':
+        alpha = trial.suggest_float('alpha', 0.1, 10.0)
+        l1_ratio = trial.suggest_float('l1_ratio', 0.0, 1.0)
+        pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=PCA(n_components=50))
+    elif model.__class__.__name__ == 'BayesianRidge':
+        alpha = trial.suggest_float('alpha_1', 1e-8, 1e-4, log=True)
+        lambda_1 = trial.suggest_float('lambda_1', 1e-8, 1e-4, log=True)
+        alpha_2 = trial.suggest_float('alpha_2', 1e-8, 1e-4, log=True)
+        lambda_2 = trial.suggest_float('lambda_2', 1e-8, 1e-4, log=True)
+        pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=PCA(n_components=30))
+    else:
+        C_term = trial.suggest_float('C', 0.1, 10.0)
+        gamma = trial.suggest_categorical('gamma', ['auto', 'scale'])
+        epsilon = trial.suggest_float('epsilon', 0.01, 1.0)
+        kernel = trial.suggest_categorical('kernel', ['linear', 'poly', 'rbf'])
+        if kernel == 'poly':
+            degree = trial.suggest_int('degree', 2, 5)
+            coef0 = trial.suggest_float('coef0', 0.0, 1.0)
+        else:
+            degree = 1
+            coef0 = 0.0
+        pipeline = create_pipeline(SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon), scaler=False, feature_selector=PCA(n_components=95))        
+    # Perform cross-validation
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
+    
+    return np.mean(scores)
 
 def main():
     pass
