@@ -1,6 +1,7 @@
 # Loading the libraries
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, KernelPCA
+from sklearn.feature_selection import SelectKBest, mutual_info_regression, r_regression
 from sklearn.linear_model import ElasticNet, BayesianRidge
 from sklearn.model_selection import GridSearchCV, train_test_split, RepeatedKFold
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
@@ -136,17 +137,44 @@ def grid_search(model, x, y_true, cv=5, scoring=None):
     grid.fit(x, y_true)
     return grid
 
+def optuna_dim_reduction(trial, model, x, y_true):
+    method = trial.suggest_categorical('method', ['PCA', 'KernelPCA', 'SelectKBest'])
+    if method == 'PCA':
+        n_components = trial.suggest_int('n_components', 1, 95)
+        pipeline = create_pipeline(model, scaler=False, feature_selector=PCA(n_components=n_components))
+    elif method == 'KernelPCA':
+        kernel = trial.suggest_categorical('kernel', ['linear', 'poly', 'rbf'])
+        if kernel == 'poly':
+            degree = trial.suggest_int('degree', 2, 5)
+        else:
+            degree = 3
+        n_components = trial.suggest_int('n_components', 1, 95)
+        pipeline = create_pipeline(model, scaler=False, feature_selector=KernelPCA(kernel=kernel, degree=degree, n_components=n_components))
+    else:
+        sk_method = trial.suggest_categorical('sk_method', ['mutual_info_regression', 'r_regression'])
+        if sk_method == 'mutual_info_regression':
+            score_func = mutual_info_regression
+        else:
+            score_func = r_regression
+        k = trial.suggest_int('k', 1, 95)
+        pipeline = create_pipeline(model, scaler=False, feature_selector=SelectKBest(score_func=score_func, k=k))
+    # Perform cross-validation
+    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
+    return np.mean(scores)
+    
+
 def optuna_objective(trial, model, x, y_true):
     if model.__class__.__name__ == 'ElasticNet':
         alpha = trial.suggest_float('alpha', 0.1, 10.0)
         l1_ratio = trial.suggest_float('l1_ratio', 0.0, 1.0)
-        pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=PCA(n_components=50))
+        pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=PCA(n_components=90))
     elif model.__class__.__name__ == 'BayesianRidge':
         alpha = trial.suggest_float('alpha_1', 1e-8, 1e-4, log=True)
         lambda_1 = trial.suggest_float('lambda_1', 1e-8, 1e-4, log=True)
         alpha_2 = trial.suggest_float('alpha_2', 1e-8, 1e-4, log=True)
         lambda_2 = trial.suggest_float('lambda_2', 1e-8, 1e-4, log=True)
-        pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=PCA(n_components=30))
+        pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=SelectKBest(score_func=mutual_info_regression, k=81))
     else:
         C_term = trial.suggest_float('C', 0.1, 10.0)
         gamma = trial.suggest_categorical('gamma', ['auto', 'scale'])
@@ -158,7 +186,7 @@ def optuna_objective(trial, model, x, y_true):
         else:
             degree = 1
             coef0 = 0.0
-        pipeline = create_pipeline(SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon), scaler=False, feature_selector=PCA(n_components=95))        
+        pipeline = create_pipeline(SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon), scaler=False, feature_selector=PCA(n_components=82))        
     # Perform cross-validation
     cv = KFold(n_splits=5, shuffle=True, random_state=42)
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
