@@ -10,15 +10,18 @@ from sklearn.utils import resample
 from pathlib import Path
 from sklearn.model_selection import KFold, cross_val_score
 import optuna
+import os
 import joblib
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 
 def load_scaler():
     # Load the scaler
     cwd = Path.cwd()
-    scaler_path = cwd / "models" / "Standardscaler.pkl"
+    root = cwd.parent
+    scaler_path = root / "models" / "Standardscaler.pkl"
     scaler = joblib.load(scaler_path)
     return scaler
 
@@ -40,13 +43,17 @@ def create_pipeline(model, scaler=False, feature_selector=None):
     pipeline = Pipeline(steps)
     return pipeline
 
-def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', filename='', save=False):
+def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', filename='', save=False, default_path=True):
     # Fit the pipeline to the training data
     pipeline.fit(X_train, y_train)
     # Save the pipeline
     if save:
-        model_path = root_path / 'models' / filename
-        joblib.dump(pipeline, model_path)
+        if default_path:
+            model_path = root_path / 'models' / filename
+            joblib.dump(pipeline, model_path)
+        else:
+            model_path = os.path.join(root_path, filename)
+            joblib.dump(pipeline, model_path)
     # Make predictions
     y_pred = pipeline.predict(x_test)
     return y_pred, pipeline
@@ -124,6 +131,8 @@ def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
     plt.tight_layout()
     plt.show()
 
+# Define the grid search function, for feature selection
+# Here only 2 methods are used, PCA and KernelPCA
 def grid_search(model, x, y_true, cv=5, scoring=None):
     pipeline = create_pipeline(model, scaler=False, feature_selector=None)
     N_FEATURES_OPTIONS = [10, 30, 50, 95]
@@ -137,20 +146,26 @@ def grid_search(model, x, y_true, cv=5, scoring=None):
     grid.fit(x, y_true)
     return grid
 
+# Optuna objective function for searching the optimal feature selection technique per model
 def optuna_dim_reduction(trial, model, x, y_true):
+    # Define the feature selection method
     method = trial.suggest_categorical('method', ['PCA', 'KernelPCA', 'SelectKBest'])
     if method == 'PCA':
+        # For PCA, suggest the number of components
         n_components = trial.suggest_int('n_components', 1, 95)
         pipeline = create_pipeline(model, scaler=False, feature_selector=PCA(n_components=n_components))
     elif method == 'KernelPCA':
+        # For KernelPCA, suggest the kernel type and number of components
         kernel = trial.suggest_categorical('kernel', ['linear', 'poly', 'rbf'])
         if kernel == 'poly':
+            #  For polynomial kernel, suggest the degree
             degree = trial.suggest_int('degree', 2, 5)
         else:
             degree = 3
         n_components = trial.suggest_int('n_components', 1, 95)
         pipeline = create_pipeline(model, scaler=False, feature_selector=KernelPCA(kernel=kernel, degree=degree, n_components=n_components))
     else:
+        # For SelectKBest, suggest the scoring function and number of features
         sk_method = trial.suggest_categorical('sk_method', ['mutual_info_regression', 'r_regression'])
         if sk_method == 'mutual_info_regression':
             score_func = mutual_info_regression
@@ -163,23 +178,28 @@ def optuna_dim_reduction(trial, model, x, y_true):
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
     return np.mean(scores)
     
-
+# Optuna objective function for hyperparameter tuning with given feature selection technique
 def optuna_objective(trial, model, x, y_true):
+    # For ElasticNet, suggest the alpha and l1_ratio parameters
     if model.__class__.__name__ == 'ElasticNet':
         alpha = trial.suggest_float('alpha', 0.1, 10.0)
         l1_ratio = trial.suggest_float('l1_ratio', 0.0, 1.0)
+        # Create the pipeline with the feature selector that was suggested in the previous step
         pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=PCA(n_components=90))
+    # For BayesianRidge, suggest the alpha_1, lambda_1, alpha_2, and lambda_2 parameters
     elif model.__class__.__name__ == 'BayesianRidge':
         alpha = trial.suggest_float('alpha_1', 1e-8, 1e-4, log=True)
         lambda_1 = trial.suggest_float('lambda_1', 1e-8, 1e-4, log=True)
         alpha_2 = trial.suggest_float('alpha_2', 1e-8, 1e-4, log=True)
         lambda_2 = trial.suggest_float('lambda_2', 1e-8, 1e-4, log=True)
         pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=SelectKBest(score_func=mutual_info_regression, k=81))
+    # For SVR, suggest the C, gamma, epsilon, and kernel parameters
     else:
         C_term = trial.suggest_float('C', 0.1, 10.0)
         gamma = trial.suggest_categorical('gamma', ['auto', 'scale'])
         epsilon = trial.suggest_float('epsilon', 0.01, 1.0)
         kernel = trial.suggest_categorical('kernel', ['linear', 'poly', 'rbf'])
+        # For polynomial kernel, suggest the degree and coef0 parameters
         if kernel == 'poly':
             degree = trial.suggest_int('degree', 2, 5)
             coef0 = trial.suggest_float('coef0', 0.0, 1.0)
@@ -190,8 +210,27 @@ def optuna_objective(trial, model, x, y_true):
     # Perform cross-validation
     cv = KFold(n_splits=5, shuffle=True, random_state=42)
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
-    
     return np.mean(scores)
+
+# Load the final model and make predictions on the defined dataframe
+def bmi_pred(df_path):
+    # Get the working directory
+    cwd = Path.cwd()
+    root = cwd.parent
+    # Navigate to the models folder and find the winner model
+    winner = os.path.join(root, "models/final_models/winner.pkl")
+    df = pd.read_csv(df_path)
+    # Use only the microbial data as features
+    final_df = df.drop(columns=['Unnamed: 0', 'Experiment type', 'Disease MESH ID', 'Sex', 'Project ID', 'Host age'])
+    x = final_df.drop(columns=['BMI'])
+    # Load the pipeline
+    pipeline = joblib.load(winner)
+    # Make predictions
+    y_pred = pipeline.predict(x)
+    return y_pred
+
+
+
 
 def main():
     pass
