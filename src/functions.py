@@ -46,11 +46,12 @@ def create_pipeline(model, scaler=False, feature_selector=None):
 def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', filename='', save=False, default_path=True):
     # Fit the pipeline to the training data
     pipeline.fit(X_train, y_train)
-    # Save the pipeline
+    # Save the pipeline, default path is the models folder
     if save:
         if default_path:
             model_path = root_path / 'models' / filename
             joblib.dump(pipeline, model_path)
+        # Save the pipeline to the specified path, this is for the winner model
         else:
             model_path = os.path.join(root_path, filename)
             joblib.dump(pipeline, model_path)
@@ -58,20 +59,27 @@ def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', fi
     y_pred = pipeline.predict(x_test)
     return y_pred, pipeline
 
+# Repeated KFold cross-validation
 def kfold(x, y_true, pipeline, n_splits=5, n_repeats=5, random_state=42):
+    # Initialize lists to store scores
     rmse_scores = []
     mae_scores = []
     r2_scores = []
+    # Define the repeated k-fold cross-validation class
     rkf = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=random_state)
+    # Iterate through the splits
     for train_index, test_index in rkf.split(x):
         X_train, X_test = x.iloc[train_index], x.iloc[test_index]
         y_train, y_test = y_true.iloc[train_index], y_true.iloc[test_index]
         y_pred, _ = train_model_and_predict(X_train, y_train, X_test, pipeline)
+        # Calculate the scores
         rmse_scores.append(root_mean_squared_error(y_test, y_pred))
         mae_scores.append(mean_absolute_error(y_test, y_pred))
         r2_scores.append(r2_score(y_test, y_pred))
     return rmse_scores, mae_scores, r2_scores
-    
+
+# Function to apply RepeatedKFold cross-validation and bootstrap sampling
+# If all are set to False they just run the train-test split once
 def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=False):
     scores = {'rmse_scores': [],'mae_scores': [],'r2_scores': []}
     # Bootstrap
@@ -105,12 +113,14 @@ def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=
         scores['r2_scores'].append(r2)
     return scores
 
+# Function to calculate the mean, standard deviation, and median of a list of scores
 def calculate_statistics(scores):
     mean = np.mean(scores)
     std = np.std(scores)
     median = np.median(scores)
     return mean, std, median
 
+# Function to create a boxplot of the scores
 def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
     n = len(metrics)
     fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
@@ -131,6 +141,20 @@ def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
     plt.tight_layout()
     plt.show()
 
+# Function that calls all the functions that are used regularly for training and evaluating models
+def bootstrap2boxplot(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=False, root_path='', filename='', save=False, default_path=True):
+    # Train the model and save it to the specified path
+    train_model_and_predict(x, y_true, x_test, pipeline, root_path=root_path, filename=filename, save=save, default_path=default_path)
+    # Perform bootstrap sampling or k-fold cross-validation
+    scores = bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=n_iter, bstrap=bstrap, kf=kf)
+    # Calculate the statistics for RMSE, MAE, and R2
+    rmse_scores, mae_scores, r2_scores = scores['rmse_scores'], scores['mae_scores'], scores['r2_scores']
+    mean_rmse, std_rmse, median_rmse = calculate_statistics(rmse_scores)
+    mean_mae, std_mae, median_mae = calculate_statistics(mae_scores)
+    mean_r2, std_r2, median_r2 = calculate_statistics(r2_scores)
+    # Create a boxplot
+    create_boxplot([rmse_scores, mae_scores, r2_scores], pipeline.__class__.__name__, ["RMSE", "MAE", "R2"], [mean_rmse, mean_mae, mean_r2], [std_rmse, std_mae, std_r2], [median_rmse, median_mae, median_r2])
+    
 # Define the grid search function, for feature selection
 # Here only 2 methods are used, PCA and KernelPCA
 def grid_search(model, x, y_true, cv=5, scoring=None):
@@ -174,25 +198,34 @@ def optuna_dim_reduction(trial, model, x, y_true):
         k = trial.suggest_int('k', 1, 95)
         pipeline = create_pipeline(model, scaler=False, feature_selector=SelectKBest(score_func=score_func, k=k))
     # Perform cross-validation
-    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    cv = RepeatedKFold(n_splits=5, n_repeats=10, random_state=42)
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
     return np.mean(scores)
     
 # Optuna objective function for hyperparameter tuning with given feature selection technique
-def optuna_objective(trial, model, x, y_true):
+def optuna_objective(trial, model, x, y_true, pipeline=None):
     # For ElasticNet, suggest the alpha and l1_ratio parameters
     if model.__class__.__name__ == 'ElasticNet':
         alpha = trial.suggest_float('alpha', 0.1, 10.0)
         l1_ratio = trial.suggest_float('l1_ratio', 0.0, 1.0)
-        # Create the pipeline with the feature selector that was suggested in the previous step
-        pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=PCA(n_components=90))
+        # If only a model is None, then create a new pipeline with only the specified model
+        if pipeline is None:
+            pipeline = create_pipeline(ElasticNet(alpha=alpha, l1_ratio=l1_ratio), scaler=False, feature_selector=None)
+        # If a pipeline is passed, then set the model parameters, otherwise the model is not instantiated properly in optuna
+        else:
+            pipeline.set_params(model=ElasticNet(alpha=alpha, l1_ratio=l1_ratio))
     # For BayesianRidge, suggest the alpha_1, lambda_1, alpha_2, and lambda_2 parameters
     elif model.__class__.__name__ == 'BayesianRidge':
         alpha = trial.suggest_float('alpha_1', 1e-8, 1e-4, log=True)
         lambda_1 = trial.suggest_float('lambda_1', 1e-8, 1e-4, log=True)
         alpha_2 = trial.suggest_float('alpha_2', 1e-8, 1e-4, log=True)
         lambda_2 = trial.suggest_float('lambda_2', 1e-8, 1e-4, log=True)
-        pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=SelectKBest(score_func=mutual_info_regression, k=81))
+        # If only a model is None, then create a new pipeline with only the specified model
+        if pipeline is None:
+            pipeline = create_pipeline(BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2), scaler=False, feature_selector=None)
+        # If a pipeline is passed, then set the model parameters, otherwise the model is not instantiated properly in optuna
+        else:
+            pipeline.set_params(model=BayesianRidge(alpha_1=alpha, lambda_1=lambda_1, alpha_2=alpha_2, lambda_2=lambda_2))
     # For SVR, suggest the C, gamma, epsilon, and kernel parameters
     else:
         C_term = trial.suggest_float('C', 0.1, 10.0)
@@ -206,9 +239,14 @@ def optuna_objective(trial, model, x, y_true):
         else:
             degree = 1
             coef0 = 0.0
-        pipeline = create_pipeline(SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon), scaler=False, feature_selector=PCA(n_components=82))        
+        # If only a model is None, then create a new pipeline with only the specified model
+        if pipeline is None:
+            pipeline = create_pipeline(SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon), scaler=False, feature_selector=None)
+        # If a pipeline is passed, then set the model parameters, otherwise the model is not instantiated properly in optuna
+        else:
+            pipeline.set_params(model=SVR(C=C_term, kernel=kernel, degree=degree, coef0=coef0, gamma=gamma, epsilon=epsilon))
     # Perform cross-validation
-    cv = KFold(n_splits=5, shuffle=True, random_state=42)
+    cv = RepeatedKFold(n_splits=5, n_repeats=10, random_state=42)
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
     return np.mean(scores)
 
@@ -228,9 +266,6 @@ def bmi_pred(df_path):
     # Make predictions
     y_pred = pipeline.predict(x)
     return y_pred
-
-
-
 
 def main():
     pass
