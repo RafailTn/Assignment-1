@@ -1,3 +1,8 @@
+"""
+This file does not contain any tests
+Additional time would be needed to 
+write a proper test file
+"""
 # Loading the libraries
 from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, KernelPCA
@@ -16,8 +21,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+from typing import Optional, List
 
 def load_scaler():
+    """
+    Loads the standard scaler from the models directory.
+    Returns:
+        scaler: The standard scaler object.
+    """
     # Load the scaler
     cwd = Path.cwd()
     root = cwd.parent
@@ -25,14 +36,26 @@ def load_scaler():
     scaler = joblib.load(scaler_path)
     return scaler
 
-def create_pipeline(model, scaler=False, feature_selector=None):
+def create_pipeline(
+    model: object,
+    scaler: bool = False,
+    feature_selector: Optional[object] = None
+):
+    """
+    Creates a pipeline for the model.
+    Args:
+        model: The model object.
+        scaler: Whether to use a scaler.
+        feature_selector: The feature selector object.
+    Returns:
+        pipeline: The pipeline object.
+    """
     # Initialize the steps for the pipeline
     steps = []
     # Add the scaler if needed
-    if scaler:
-        # Load the scaler
-        scaler = load_scaler()
-        steps.append(('scaler', scaler))
+    # Load the scaler
+    scaler = load_scaler()
+    steps.append(('scaler', scaler))
     # Add the feature selector
     if feature_selector is not None:
         steps.append(('feature_selector', feature_selector))
@@ -43,7 +66,28 @@ def create_pipeline(model, scaler=False, feature_selector=None):
     pipeline = Pipeline(steps)
     return pipeline
 
-def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', filename='', save=False, default_path=True):
+def train_model_and_predict(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    x_test: pd.DataFrame,
+    pipeline: Pipeline,
+    root_path: str = '',
+    filename: str = '',
+    save: bool = False,
+    default_path: bool = True
+):
+    """
+    Trains the model, stores it and makes predictions.
+    Args:
+        X_train: The training data.
+        y_train: The training labels.
+        x_test: The test data.
+        pipeline: The pipeline object.
+        root_path: Assignment-1 folder
+        filename: Name of the output file or custom path after root if default_path=False
+        save: Whether to save the model
+        default_path: whether to save in models (True) or another folder (False)
+    """
     # Fit the pipeline to the training data
     pipeline.fit(X_train, y_train)
     # Save the pipeline, default path is the models folder
@@ -60,7 +104,23 @@ def train_model_and_predict(X_train, y_train, x_test, pipeline, root_path='', fi
     return y_pred, pipeline
 
 # Repeated KFold cross-validation
-def kfold(x, y_true, pipeline, n_splits=5, n_repeats=5, random_state=42):
+def kfold(
+    x: pd.DataFrame,
+    y_true: pd.Series,
+    pipeline: Pipeline,
+    n_splits: int = 5,
+    n_repeats: int = 5,
+    random_state: int = 42
+):
+    """
+    Performs repeated KFold cross-validation.
+    Args:
+        x: The input data.
+        y_true: The true labels.
+        pipeline: The pipeline object.
+        n_splits: Number of folds
+        n_repeats: Number of times kfold runs
+    """
     # Initialize lists to store scores
     rmse_scores = []
     mae_scores = []
@@ -80,7 +140,28 @@ def kfold(x, y_true, pipeline, n_splits=5, n_repeats=5, random_state=42):
 
 # Function to apply RepeatedKFold cross-validation and bootstrap sampling
 # If all are set to False they just run the train-test split once
-def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=False):
+def bootstrap(
+    x: pd.DataFrame,
+    y_true: pd.Series,
+    x_test: pd.DataFrame,
+    y_test: pd.Series,
+    pipeline: Pipeline,
+    n_iter: int = 100,
+    bstrap: bool = False,
+    kf: bool = False
+):
+    """
+    Performs bootstrap sampling or k-fold cross-validation.
+    Args:
+        x: The input data.
+        y_true: The true labels.
+        x_test: The test data.
+        y_test: The test labels.
+        pipeline: The pipeline object.
+        n_iter: The number of iterations for bootstrap sampling or number of repeats.
+        bstrap: Whether to perform bootstrap sampling.
+        kf: Whether to perform k-fold cross-validation.
+    """
     scores = {'rmse_scores': [],'mae_scores': [],'r2_scores': []}
     # Bootstrap
     if bstrap and not kf:
@@ -115,13 +196,32 @@ def bootstrap(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=
 
 # Function to calculate the mean, standard deviation, and median of a list of scores
 def calculate_statistics(scores):
+    """
+    Calculates the mean, standard deviation, and median of a list of scores.
+    Args:
+        scores: The list of scores.
+    """
     mean = np.mean(scores)
     std = np.std(scores)
     median = np.median(scores)
     return mean, std, median
 
 # Function to create a boxplot of the scores
-def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
+def create_boxplot(
+    scores_list: List[List[float]],
+    model_name: str,
+    metrics: List[str],
+    means: List[float],
+    stds: List[float],
+    medians: List[float]
+):
+    """
+    Creates a boxplot of the scores.
+    Args:
+        scores_list: The list of scores.
+        model_name: The name of the model.
+        metrics: The metrics to plot.
+    """
     n = len(metrics)
     fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
     # If there's only one metric, ensure axes is iterable.
@@ -142,7 +242,35 @@ def create_boxplot(scores_list, model_name, metrics, means, stds, medians):
     plt.show()
 
 # Function that calls all the functions that are used regularly for training and evaluating models
-def bootstrap2boxplot(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=False, kf=False, root_path='', filename='', save=False, default_path=True):
+def bootstrap2boxplot(
+    x: pd.DataFrame,
+    y_true: pd.Series,
+    x_test: pd.DataFrame,
+    y_test: pd.Series,
+    pipeline: Pipeline,
+    n_iter: int = 100,
+    bstrap: bool = False,
+    kf: bool = False,
+    root_path: str = '',
+    filename: str = '',
+    save: bool = False,
+    default_path: bool = True
+):
+    """
+    Trains the model, stores it and makes predictions.
+    Args:
+        x: The input data.
+        y_true: The true labels.
+        x_test: The test data.
+        pipeline: The pipeline object.
+        n_iter: The number of iterations for bootstrap sampling.
+        bstrap: Whether to perform bootstrap sampling.
+        kf: Whether to perform k-fold cross-validation.
+        root_path: The path to save the model.
+        filename: The name of the model.
+        save: Whether to save the model.
+        default_path: Whether to save the model to the default path.
+    """
     # Train the model and save it to the specified path
     train_model_and_predict(x, y_true, x_test, pipeline, root_path=root_path, filename=filename, save=save, default_path=default_path)
     # Perform bootstrap sampling or k-fold cross-validation
@@ -157,7 +285,22 @@ def bootstrap2boxplot(x, y_true, x_test, y_test, pipeline, n_iter=100, bstrap=Fa
     
 # Define the grid search function, for feature selection
 # Here only 2 methods are used, PCA and KernelPCA
-def grid_search(model, x, y_true, cv=5, scoring=None):
+def grid_search(
+    model: object,
+    x: pd.DataFrame,
+    y_true: pd.Series,
+    cv: int = 5,
+    scoring: Optional[str] = None
+):
+    """
+    Performs grid search for the optimal feature selection technique.
+    Args:
+        model: The model object.
+        x: The input data.
+        y_true: The true labels.
+        cv: The number of folds.
+        scoring: The scoring metric.
+    """
     pipeline = create_pipeline(model, scaler=False, feature_selector=None)
     N_FEATURES_OPTIONS = [10, 30, 50, 95]
     grid_params = [
@@ -171,7 +314,20 @@ def grid_search(model, x, y_true, cv=5, scoring=None):
     return grid
 
 # Optuna objective function for searching the optimal feature selection technique per model
-def optuna_dim_reduction(trial, model, x, y_true):
+def optuna_dim_reduction(
+    trial: object,
+    model: object,
+    x: pd.DataFrame,
+    y_true: pd.Series
+):
+    """
+    Performs optuna for the optimal feature selection technique per model.
+    Args:
+        trial: The optuna trial object.
+        model: The model object.
+        x: The input data.
+        y_true: The true labels.
+    """
     # Define the feature selection method
     method = trial.suggest_categorical('method', ['PCA', 'KernelPCA', 'SelectKBest'])
     if method == 'PCA':
@@ -203,7 +359,21 @@ def optuna_dim_reduction(trial, model, x, y_true):
     return np.mean(scores)
     
 # Optuna objective function for hyperparameter tuning with given feature selection technique
-def optuna_objective(trial, model, x, y_true, pipeline=None):
+def optuna_objective(
+    trial: object,
+    model: object,
+    x: pd.DataFrame,
+    y_true: pd.Series,
+    pipeline: Optional[Pipeline] = None
+):
+    """
+    Performs optuna for the optimal hyperparameter tuning per model.
+    Args:
+        trial: The optuna trial object.
+        model: The model object.
+        x: The input data.
+        y_true: The true labels.
+    """
     # For ElasticNet, suggest the alpha and l1_ratio parameters
     if model.__class__.__name__ == 'ElasticNet':
         alpha = trial.suggest_float('alpha', 0.1, 10.0)
@@ -251,7 +421,12 @@ def optuna_objective(trial, model, x, y_true, pipeline=None):
     return np.mean(scores)
 
 # Load the final model and make predictions on the defined dataframe
-def bmi_pred(df_path):
+def bmi_pred(df_path: str):
+    """
+    Loads the final model and makes predictions on the defined dataframe.
+    Args:
+        df_path: The path to the dataframe.
+    """
     # Get the working directory
     cwd = Path.cwd()
     root = cwd.parent
