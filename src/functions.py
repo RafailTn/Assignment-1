@@ -280,8 +280,10 @@ def bootstrap2boxplot(
     mean_rmse, std_rmse, median_rmse = calculate_statistics(rmse_scores)
     mean_mae, std_mae, median_mae = calculate_statistics(mae_scores)
     mean_r2, std_r2, median_r2 = calculate_statistics(r2_scores)
+    # Get the model name from the pipeline's steps
+    model_name = pipeline.named_steps['model'].__class__.__name__
     # Create a boxplot
-    create_boxplot([rmse_scores, mae_scores, r2_scores], pipeline.__class__.__name__, ["RMSE", "MAE", "R2"], [mean_rmse, mean_mae, mean_r2], [std_rmse, std_mae, std_r2], [median_rmse, median_mae, median_r2])
+    create_boxplot([rmse_scores, mae_scores, r2_scores], model_name, ["RMSE", "MAE", "R2"], [mean_rmse, mean_mae, mean_r2], [std_rmse, std_mae, std_r2], [median_rmse, median_mae, median_r2])
     
 # Define the grid search function, for feature selection
 # Here only 2 methods are used, PCA and KernelPCA
