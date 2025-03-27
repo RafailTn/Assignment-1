@@ -9,11 +9,11 @@ from sklearn.decomposition import PCA, KernelPCA
 from sklearn.feature_selection import SelectKBest, mutual_info_regression, r_regression
 from sklearn.linear_model import ElasticNet, BayesianRidge
 from sklearn.model_selection import GridSearchCV, train_test_split, RepeatedKFold
-from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score, accuracy_score, f1_score, precision_score, recall_score, fbeta_score
 from sklearn.svm import SVR
 from sklearn.utils import resample
 from pathlib import Path
-from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import cross_val_score
 import optuna
 import os
 import joblib
@@ -420,6 +420,8 @@ def optuna_objective(
     # Perform cross-validation
     cv = RepeatedKFold(n_splits=5, n_repeats=10, random_state=42)
     scores = cross_val_score(pipeline, x, y_true, cv=cv, scoring="neg_root_mean_squared_error")
+    if trial.should_prune():
+        raise optuna.exceptions.TrialPruned()
     return np.mean(scores)
 
 # Load the final model and make predictions on the defined dataframe
@@ -443,6 +445,41 @@ def bmi_pred(df_path: str):
     # Make predictions
     y_pred = pipeline.predict(x)
     return y_pred
+
+def add_bmi_category(df: pd.DataFrame):
+    """
+    Adds a BMI category column to the dataframe based on WHO BMI classification.
+    
+    Args:
+        df: DataFrame containing a 'BMI' column
+        
+    Returns:
+        DataFrame with an additional 'BMI_Category' column
+    """
+    # Create a copy to avoid modifying the original dataframe
+    df = df.copy()
+    # Define the BMI categories
+    conditions = [
+        (df['BMI'] < 16.0),
+        (df['BMI'].between(16.0, 18.4)),
+        (df['BMI'].between(18.5, 24.9)),
+        (df['BMI'].between(25.0, 29.9)),
+        (df['BMI'].between(30.0, 34.9)),
+        (df['BMI'].between(35.0, 39.9)),
+        (df['BMI'] >= 40.0)
+    ]
+    categories = [
+        'Severely Underweight',
+        'Underweight',
+        'Normal weight',
+        'Overweight',
+        'Moderately Obese',
+        'Severely Obese',
+        'Morbidly Obese'
+    ]
+    # Create the BMI_Category column
+    df['BMI_Category'] = np.select(conditions, categories, default='Unknown')
+    return df
 
 def main():
     pass
