@@ -55,8 +55,11 @@ def create_pipeline(
     steps = []
     # Add the scaler if needed
     # Load the scaler
-    scaler = load_scaler()
-    steps.append(('scaler', scaler))
+    if scaler:
+        scaler = load_scaler()
+        steps.append(('scaler', scaler))
+    else:
+        steps.append(('scaler', 'passthrough'))
     # Add the feature selector
     if feature_selector is not None:
         steps.append(('feature_selector', feature_selector))
